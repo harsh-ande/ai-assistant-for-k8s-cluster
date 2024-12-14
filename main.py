@@ -5,7 +5,7 @@ from flask import Flask, request, jsonify
 from pydantic import BaseModel, ValidationError
 import openai
 
-# openai.api_key = "<redacted>"
+openai.api_key = "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"
 
 # Configure logging
 logging.basicConfig(level=logging.DEBUG, 
