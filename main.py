@@ -1,11 +1,14 @@
 import logging
+import os
 import subprocess
 
 from flask import Flask, request, jsonify
 from pydantic import BaseModel, ValidationError
 import openai
 
-openai.api_key = "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"
+# openai.api_key = "<redacted>"
+
+openai.api_key = os.getenv("OPENAI_API_KEY")
 
 # Configure logging
 logging.basicConfig(level=logging.DEBUG, 
@@ -22,6 +25,12 @@ class QueryResponse(BaseModel):
 
 @app.route('/query', methods=['POST'])
 def create_query():
+    # Check if the key is successfully loaded
+    if openai.api_key:
+        logging.info("API key successfully loaded.")
+    else:
+        logging.info("API key is missing. Please set the OPENAI_API_KEY environment variable.")
+
     try:
         # Extract the question from the request data
         request_data = request.json
@@ -89,4 +98,4 @@ def create_query():
         return jsonify({"error": e.errors()}), 400
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=8000, debug=True)
+    app.run(host="0.0.0.0", port=8000)
