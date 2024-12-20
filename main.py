@@ -2,6 +2,7 @@ import logging
 from flask import Flask, request, jsonify
 from pydantic import BaseModel, ValidationError
 import openai
+import os
 
 # openai.api_key = "<redacted>"
 
