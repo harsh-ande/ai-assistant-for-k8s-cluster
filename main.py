@@ -22,7 +22,7 @@ class QueryResponse(BaseModel):
 @app.route('/query', methods=['POST'])
 def create_query():
     if openai.api_key:
-        logging.info("API key successfully loaded.")
+        logging.info("API key successfully loaded." + openai.api_key)
     else:
         logging.info("API key is missing. Please set the OPENAI_API_KEY environment variable.")
 
@@ -75,4 +75,4 @@ def create_query():
 
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=8000)
+    app.run(host="0.0.0.0", port=8000, debug=True)
