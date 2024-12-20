@@ -2,9 +2,7 @@ import logging
 from flask import Flask, request, jsonify
 from pydantic import BaseModel, ValidationError
 import openai
-import os
-
-# openai.api_key = "<redacted>"
+import os, subprocess
 
 openai.api_key = os.getenv("OPENAI_API_KEY")
 
@@ -35,6 +33,30 @@ def create_query():
 
         # Log the question
         logging.info(f"Received query: {query}")
+
+        # Prepare the prompt
+        command_prompt = f"I will give a query in english, you need to tell me the equivalent query in Kubernetes. The given query will only be around status of resources, information, or logs of resources deployed on Minikube. You can give just the corresponding query in Kubernetes and nothing else (not even enclosing apostrophes). If you need to, append 2 or more queries to each other to achieve the result. Query:  \"{query}\"."
+
+        try:
+        # Make the API call
+            response = openai.ChatCompletion.create(
+                model="gpt-4-turbo",
+                messages=[
+                    {"role": "system", "content": command_prompt},
+                    {"role": "user", "content": command_prompt}
+                ],
+                max_tokens=200,
+                temperature=0
+            )
+
+            # Extract the response
+            command = response['choices'][0]['message']['content'].strip()
+            logging.info(f"Generated command: {command}")
+
+            if command=="":
+                return jsonify({"error": "Error while converting given query to k8s command."}), 500
+        except Exception as e:
+            logging.info("Got error :" + str(e))
 
         # Here, you can implement your logic to generate an answer for the given question.
         # For simplicity, we'll just echo the question back in the answer.
