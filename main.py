@@ -67,12 +67,13 @@ def create_query():
             logging.info("Got error :" + str(e))
 
         # Here, you can implement your logic to generate an answer for the given question.
+        answer = "14"
         # For simplicity, we'll just echo the question back in the answer.
         try:
             # Split the command into a list for subprocess
             answer = subprocess.run(command, shell=True, check=True, capture_output=True, text=True).stdout.strip()
         except Exception as e:
-            logging.info("Error while running command - " + e)
+            logging.info("Error while running command - " + str(e))
             # return jsonify({"error": e}), 500
 
         # Log the answer
