@@ -31,6 +31,12 @@ def create_query():
         request_data = request.json
         query = request_data.get('query')
 
+        try:
+            response = openai.Model.list()
+            logging.info("Models generated " + response)
+        except Exception as e:
+            logging.info(f"Error in listing models: {e}")
+
         # Log the question
         logging.info(f"Received query: {query}")
 
@@ -39,6 +45,7 @@ def create_query():
 
         try:
         # Make the API call
+            logging.info("#1")
             response = openai.ChatCompletion.create(
                 model="gpt-4-turbo",
                 messages=[
@@ -48,6 +55,7 @@ def create_query():
                 max_tokens=200,
                 temperature=0
             )
+            logging.info("#2")
 
             # Extract the response
             command = response['choices'][0]['message']['content'].strip()
