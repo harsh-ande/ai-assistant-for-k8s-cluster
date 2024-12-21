@@ -1,4 +1,4 @@
 requests
 Flask
 pydantic
-openai==0.28.0
+openai
