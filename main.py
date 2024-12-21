@@ -20,6 +20,21 @@ class QueryResponse(BaseModel):
     query: str
     answer: str
 
+prep_commands = {
+    "all_resources": "kubectl get all -o json",
+    # "pv": "kubectl get pv -o json",
+    # "pvc": "kubectl get pvc -o json",
+    # "cm": "kubectl get configmap -o json",
+    # "crd": "kubectl get crd -o json",
+    "secret": "kubectl get secret -o json",
+    "sa": "kubectl get serviceaccount -o json",
+    # "hpa": "kubectl get hpa -o json",
+    # "pdb": "kubectl get pdb -o json",
+    # "ns": "kubectl get namespaces -o json",
+    # "endpoints": "kubectl get endpoints -o json",
+    # "statefulset": "kubectl get statefulset -o json"
+}
+
 
 @app.route('/query', methods=['POST'])
 def create_query():
@@ -31,19 +46,21 @@ def create_query():
     request_data = request.json
     query = request_data.get('query')
 
-    try:
-        answer = subprocess.run("kubectl get all -o json", shell=True, check=True, capture_output=True, text=True).stdout.strip()
-        # logging.info("all resources - %s", answer)
-    except Exception as e:
-        logging.info("Error while running command - " + str(e))
-        return jsonify({"error": e}), 500
-
-    # resources_json = ast.literal_eval(answer)
-    with open("/tmp/resources.json", "w") as outfile:
-        json.dump(answer, outfile)
-
     client = OpenAI()
-    file = client.files.create(file=open("/tmp/resources.json", "rb"), purpose="fine-tune")
+    file_ids = []
+    for command in prep_commands.keys():
+        try:
+            answer = subprocess.run(prep_commands[command], shell=True, check=True, capture_output=True, text=True).stdout.strip()
+            # logging.info("all resources - %s", answer)
+        except Exception as e:
+            logging.info("Error while running command - " + str(e))
+            return jsonify({"error": e}), 500
+
+        with open("/tmp/{}.json".format(command), "w") as outfile:
+            json.dump(answer, outfile)
+        file = client.files.create(file=open("/tmp/{}.json".format(command), "rb"), purpose="fine-tune")
+        file_ids.append(file.id)
+
     try:
         messages = [
             {
@@ -52,7 +69,7 @@ def create_query():
             },
             {
                 "role": "user",
-                "content": "Query - {}\nDetails of resources - {}".format(query, {file.id})
+                "content": "Query - {}\nDetails of resources - {}".format(query, file_ids)
             }
         ]
 
