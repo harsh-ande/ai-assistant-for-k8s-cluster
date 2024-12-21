@@ -33,7 +33,7 @@ def create_query():
 
     try:
         answer = subprocess.run("kubectl get all -o json", shell=True, check=True, capture_output=True, text=True).stdout.strip()
-        logging.info("all resources - %s", answer)
+        # logging.info("all resources - %s", answer)
     except Exception as e:
         logging.info("Error while running command - " + str(e))
         return jsonify({"error": e}), 500
