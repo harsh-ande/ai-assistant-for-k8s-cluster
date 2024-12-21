@@ -65,9 +65,9 @@ def create_query():
     for command in prep_commands.keys():
         with open("/tmp/{}.json".format(command), 'r') as f:
             datas.append(json.load(f))
-    combined_data = {**datas}  # Merge dictionaries
+    # combined_data = {**datas}  # Merge dictionaries
     with open("/tmp/combined_data.json", "w") as outfile:
-        json.dump(combined_data, outfile)
+        json.dump(datas, outfile)
     file = client.files.create(file=open("/tmp/combined_data.json", "rb"), purpose="fine-tune")
     try:
         messages = [
