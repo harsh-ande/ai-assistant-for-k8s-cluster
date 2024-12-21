@@ -21,13 +21,13 @@ class QueryResponse(BaseModel):
     answer: str
 
 prep_commands = {
-    "all_resources": "kubectl get all -o json",
+    "all_resources": "kubectl get all -o json -n {}",
     # "pv": "kubectl get pv -o json",
     # "pvc": "kubectl get pvc -o json",
     # "cm": "kubectl get configmap -o json",
     # "crd": "kubectl get crd -o json",
-    "secret": "kubectl get secret -o json",
-    "sa": "kubectl get serviceaccount -o json",
+    "secret": "kubectl get secret -o json -n {}",
+    "sa": "kubectl get serviceaccount -o json -n {}",
     # "hpa": "kubectl get hpa -o json",
     # "pdb": "kubectl get pdb -o json",
     # "ns": "kubectl get namespaces -o json",
@@ -46,25 +46,37 @@ def create_query():
     request_data = request.json
     query = request_data.get('query')
 
+    try:
+        answer = subprocess.run("kubectl get ns", shell=True, check=True, capture_output=True,
+                                text=True).stdout.strip()
+        logging.info("all namespaces - %s", answer)
+        lines = answer.split("\n")
+        namespaces = [line.split()[0] for line in lines[1:]]
+    except Exception as e:
+        logging.info("Error while running command - " + str(e))
+        return jsonify({"error": e}), 500
+
     client = OpenAI()
     file_ids = []
     for command in prep_commands.keys():
-        try:
-            answer = subprocess.run(prep_commands[command], shell=True, check=True, capture_output=True, text=True).stdout.strip()
-            logging.info("all resources - %s", answer)
-        except Exception as e:
-            logging.info("Error while running command - " + str(e))
-            return jsonify({"error": e}), 500
+        for ns in namespaces:
+            try:
+                answer = subprocess.run(prep_commands[command].format(ns), shell=True, check=True, capture_output=True, text=True).stdout.strip()
+                logging.info("all resources - %s", answer)
+            except Exception as e:
+                logging.info("Error while running command - " + str(e))
+                return jsonify({"error": e}), 500
 
-        with open("/tmp/{}.json".format(command), "w") as outfile:
-            json.dump(answer, outfile)
-        file = client.files.create(file=open("/tmp/{}.json".format(command), "rb"), purpose="fine-tune")
-        file_ids.append(file.id)
+            with open("/tmp/{}_{}.json".format(command, ns), "w") as outfile:
+                json.dump(answer, outfile)
+            file = client.files.create(file=open("/tmp/{}_{}.json".format(command, ns), "rb"), purpose="fine-tune")
+            file_ids.append(file.id)
 
     datas = []
     for command in prep_commands.keys():
-        with open("/tmp/{}.json".format(command), 'r') as f:
-            datas.append(json.load(f))
+        for ns in namespaces:
+            with open("/tmp/{}_{}.json".format(command, ns), 'r') as f:
+                datas.append(json.load(f))
     # combined_data = {**datas}  # Merge dictionaries
     with open("/tmp/combined_data.json", "w") as outfile:
         json.dump(datas, outfile)
