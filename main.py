@@ -1,3 +1,4 @@
+import ast
 import logging
 from flask import Flask, request, jsonify
 from openai import OpenAI
@@ -47,11 +48,11 @@ def create_query():
     query = request_data.get('query')
 
     try:
-        answer = subprocess.run("kubectl get ns", shell=True, check=True, capture_output=True,
+        answer = subprocess.run("kubectl get ns -o json", shell=True, check=True, capture_output=True,
                                 text=True).stdout.strip()
-        logging.info("all namespaces - %s", answer)
-        lines = answer.split("\n")
-        namespaces = [line.split()[0] for line in lines[1:]]
+        json_ns = ast.literal_eval(answer)
+        namespaces = [i["metadata"]["name"] for i in json_ns["items"]]
+        logging.info("namespaces list - %s", namespaces)
     except Exception as e:
         logging.info("Error while running command - " + str(e))
         return jsonify({"error": e}), 500
