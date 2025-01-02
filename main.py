@@ -1,11 +1,8 @@
-import ast
 import logging
 from flask import Flask, request, jsonify
-from openai import OpenAI
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel
 import openai
 import os, subprocess
-import json
 
 openai.api_key = os.getenv("OPENAI_API_KEY")
 
