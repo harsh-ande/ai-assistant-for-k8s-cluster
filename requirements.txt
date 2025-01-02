@@ -1,5 +1,4 @@
 requests
-Flask~=3.1.0
-pydantic~=2.10.3
+Flask
+pydantic
 openai~=1.58
-kubernetes~=31.0.0
