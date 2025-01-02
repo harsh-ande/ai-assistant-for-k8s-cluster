@@ -85,34 +85,35 @@ def create_query():
     request_data = request.json
     query = request_data.get('query')
 
-    # Step 1: Parse the query
-    parsed_query = parse_query(query)
-    logging.info("1234")
-    logging.info(type(parsed_query))
-    logging.info(parsed_query)
-
-    try:
-        parsed_data = eval(parsed_query)  # Parse the JSON response
-        intent = parsed_data.get("intent")
-        resource = parsed_data.get("resource")
-        attribute = parsed_data.get("attribute")
-    except Exception as e:
-        return jsonify({"error": f"Failed to parse query: {e}"}), 500
-
-    # Step 2: Generate kubectl command
-    kubectl_command = generate_kubectl_command(intent, resource, attribute)
-    logging.info("generated command " + kubectl_command)
-    if not kubectl_command:
-        return jsonify({"error": "Unsupported query or intent"}), 400
-
-    # Step 3: Execute kubectl command
-    kubectl_output = execute_kubectl_command(kubectl_command)
-
-    # # Step 4: Format the response
-    # response = format_response(kubectl_output, intent)
-
-    # Step 5: Return the response
-    ret_response = QueryResponse(query=query, answer=kubectl_output)
+    # # Step 1: Parse the query
+    # parsed_query = parse_query(query)
+    # logging.info("1234")
+    # logging.info(type(parsed_query))
+    # logging.info(parsed_query)
+    #
+    # try:
+    #     parsed_data = eval(parsed_query)  # Parse the JSON response
+    #     intent = parsed_data.get("intent")
+    #     resource = parsed_data.get("resource")
+    #     attribute = parsed_data.get("attribute")
+    # except Exception as e:
+    #     return jsonify({"error": f"Failed to parse query: {e}"}), 500
+    #
+    # # Step 2: Generate kubectl command
+    # kubectl_command = generate_kubectl_command(intent, resource, attribute)
+    # logging.info("generated command " + kubectl_command)
+    # if not kubectl_command:
+    #     return jsonify({"error": "Unsupported query or intent"}), 400
+    #
+    # # Step 3: Execute kubectl command
+    # kubectl_output = execute_kubectl_command(kubectl_command)
+    #
+    # # # Step 4: Format the response
+    # # response = format_response(kubectl_output, intent)
+    #
+    # # Step 5: Return the response
+    # ret_response = QueryResponse(query=query, answer=kubectl_output)
+    ret_response = QueryResponse(query=query, answer="14")
     logging.info("Got ret_response: %s", ret_response)
     return jsonify(ret_response.dict())
     # try:
