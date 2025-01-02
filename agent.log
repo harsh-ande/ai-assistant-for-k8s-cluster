@@ -1,0 +1,8 @@
+2025-01-02 10:51:27,933 INFO - [31m[1mWARNING: This is a development server. Do not use it in a production deployment. Use a production WSGI server instead.[0m
+ * Running on all addresses (0.0.0.0)
+ * Running on http://127.0.0.1:8000
+ * Running on http://192.168.1.13:8000
+2025-01-02 10:51:27,933 INFO - [33mPress CTRL+C to quit[0m
+2025-01-02 10:51:37,939 INFO - Received query: How many pods are there in the cluster?
+2025-01-02 10:51:37,941 INFO - Generated answer: 14
+2025-01-02 10:51:37,948 INFO - 127.0.0.1 - - [02/Jan/2025 10:51:37] "POST /query HTTP/1.1" 200 -
