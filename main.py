@@ -1,11 +1,18 @@
 import ast
+import datetime
 import logging
+
+import kubernetes
 from flask import Flask, request, jsonify
 from openai import OpenAI
 from pydantic import BaseModel, ValidationError
 import openai
 import os, subprocess
 import json
+from kubernetes import config
+
+# Configs can be set in Configuration class directly or using helper utility
+config.load_kube_config()
 
 openai.api_key = os.getenv("OPENAI_API_KEY")
 
@@ -21,21 +28,52 @@ class QueryResponse(BaseModel):
     query: str
     answer: str
 
-prep_commands = {
-    "all_resources": "kubectl get all -o json -n {}",
-    # "pv": "kubectl get pv -o json",
-    # "pvc": "kubectl get pvc -o json",
-    # "cm": "kubectl get configmap -o json",
-    # "crd": "kubectl get crd -o json",
-    "secret": "kubectl get secret -o json -n {}",
-    "sa": "kubectl get serviceaccount -o json -n {}",
-    # "hpa": "kubectl get hpa -o json",
-    # "pdb": "kubectl get pdb -o json",
-    # "ns": "kubectl get namespaces -o json",
-    # "endpoints": "kubectl get endpoints -o json",
-    # "statefulset": "kubectl get statefulset -o json"
-}
+# Utility function to execute kubectl commands
+def execute_kubectl_command(command):
+    try:
+        result = subprocess.check_output(command, shell=True, text=True)
+        return result.strip()
+    except subprocess.CalledProcessError as e:
+        return f"Error executing command: {e}"
 
+# Function to parse user query using ChatGPT API (v1.58+ syntax)
+def parse_query(query):
+    messages = [
+        {"role": "system", "content": "You are an ai assistant specialized in Kubernetes queries."},
+        {"role": "user", "content": f"Extract the intent, resource, and attribute from the following Kubernetes-related query:\n\n{query}\n\nRespond with only a JSON in this format, nothing else:\n{{\"intent\": \"<intent>\", \"resource\": \"<resource>\", \"attribute\": \"<attribute>\"}}. Possible values for intent are - get_pod_count, get_container_port, get_status, get_service_port, get_probe_path, get_secret_association, get_mount_path, get_env_variable, get_database_name."}
+    ]
+    response = openai.chat.completions.create(
+        model="gpt-4-turbo",
+        messages=messages,
+    )
+    logging.info(response)
+    logging.info("returning " + response.choices[0].message.content)
+    return response.choices[0].message.content
+
+# Function to generate kubectl commands based on parsed query
+def generate_kubectl_command(intent, resource, attribute):
+    if intent == "get_namespace":
+        return f"kubectl get svc {resource} -o jsonpath='{{.metadata.namespace}}'"
+    elif intent == "get_pod_count":
+        return "kubectl get pods --all-namespaces | wc -l"
+    elif intent == "get_container_port":
+        return f"kubectl get pod {resource} -o jsonpath='{{.spec.containers[0].ports[0].containerPort}}'"
+    elif intent == "get_status":
+        return f"kubectl get pod {resource} -o jsonpath='{{.status.phase}}'"
+    elif intent == "get_service_port":
+        return f"kubectl get svc {resource} -o jsonpath='{{.spec.ports[0].port}}'"
+    elif intent == "get_probe_path":
+        return f"kubectl get pod {resource} -o jsonpath='{{.spec.containers[0].readinessProbe.httpGet.path}}'"
+    elif intent == "get_secret_association":
+        return f"kubectl get pod -o json | jq -r '.items[] | select(.spec.volumes[].secret.secretName==\"{resource}\") | .metadata.name'"
+    elif intent == "get_mount_path":
+        return f"kubectl get pod {resource} -o jsonpath='{{.spec.volumes[0].persistentVolumeClaim.claimName}}'"
+    elif intent == "get_env_variable":
+        return f"kubectl get pod {resource} -o jsonpath='{{.spec.containers[0].env[?(@.name==\"{attribute}\")].value}}'"
+    elif intent == "get_database_name":
+        return f"kubectl exec {resource} -- psql -c 'SELECT current_database()'"
+    else:
+        return None
 
 @app.route('/query', methods=['POST'])
 def create_query():
@@ -47,61 +85,41 @@ def create_query():
     request_data = request.json
     query = request_data.get('query')
 
+    # Step 1: Parse the query
+    parsed_query = parse_query(query)
+    logging.info("1234")
+    logging.info(type(parsed_query))
+    logging.info(parsed_query)
+
     try:
-        answer = subprocess.run("kubectl get ns -o json", shell=True, check=True, capture_output=True,
-                                text=True).stdout.strip()
-        json_ns = ast.literal_eval(answer)
-        namespaces = [i["metadata"]["name"] for i in json_ns["items"]]
-        logging.info("namespaces list - %s", namespaces)
+        parsed_data = eval(parsed_query)  # Parse the JSON response
+        intent = parsed_data.get("intent")
+        resource = parsed_data.get("resource")
+        attribute = parsed_data.get("attribute")
     except Exception as e:
-        logging.info("Error while running command - " + str(e))
-        return jsonify({"error": e}), 500
+        return jsonify({"error": f"Failed to parse query: {e}"}), 500
 
-    client = OpenAI()
-    for command in prep_commands.keys():
-        for ns in namespaces:
-            try:
-                answer = subprocess.run(prep_commands[command].format(ns), shell=True, check=True, capture_output=True, text=True).stdout.strip()
-                # logging.info("all resources - %s", answer)
-            except Exception as e:
-                logging.info("Error while running command - " + str(e))
-                return jsonify({"error": e}), 500
+    # Step 2: Generate kubectl command
+    kubectl_command = generate_kubectl_command(intent, resource, attribute)
+    logging.info("generated command " + kubectl_command)
+    if not kubectl_command:
+        return jsonify({"error": "Unsupported query or intent"}), 400
 
-            with open("/tmp/{}_{}.json".format(command, ns), "w") as outfile:
-                json.dump(answer, outfile)
-            file = client.files.create(file=open("/tmp/{}_{}.json".format(command, ns), "rb"), purpose="fine-tune")
+    # Step 3: Execute kubectl command
+    kubectl_output = execute_kubectl_command(kubectl_command)
 
-    datas = []
-    for command in prep_commands.keys():
-        for ns in namespaces:
-            with open("/tmp/{}_{}.json".format(command, ns), 'r') as f:
-                datas.append(json.load(f))
-    # combined_data = {**datas}  # Merge dictionaries
-    with open("/tmp/combined_data.json", "w") as outfile:
-        json.dump(datas, outfile)
-    file = client.files.create(file=open("/tmp/combined_data.json", "rb"), purpose="fine-tune")
-    try:
-        messages = [
-            {
-                "role": "system",
-                "content": "You are an ai assistant who will answer questions about resources deployed in a k8s cluster. You will be given a json file containing details of all k8s resources in all namespaces in the cluster. Answer the query given by the user based on the data from the provided json files. Since a human is giving the query, you might need to look for resource names which are similar, and not necessarily exactly the provided names. If the query contains a name like mongodb, the actual resource may have an autogenerated id attached to it like mongodb-56c598c8f. Give only one word answers, nothing else in your response."
-            },
-            {
-                "role": "user",
-                "content": "Query - {}\nDetails in json format - {}".format(query, file.id)
-            }
-        ]
+    # # Step 4: Format the response
+    # response = format_response(kubectl_output, intent)
 
-        response = openai.chat.completions.create(
-            model="gpt-4-turbo",
-            messages=messages,
-
-        )
-        ret_response = QueryResponse(query=query, answer=response.choices[0].message.content)
-        logging.info("Got ret_response: %s", ret_response)
-        return jsonify(ret_response.dict())
-    except ValidationError as e:
-        return jsonify({"error": e.errors()}), 400
+    # Step 5: Return the response
+    ret_response = QueryResponse(query=query, answer=kubectl_output)
+    logging.info("Got ret_response: %s", ret_response)
+    return jsonify(ret_response.dict())
+    # try:
+    #
+    #     return jsonify(ret_response.dict())
+    # except ValidationError as e:
+    #     return jsonify({"error": e.errors()}), 400
 
 
 if __name__ == "__main__":
