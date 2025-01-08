@@ -1,12 +1,18 @@
 import ast
+import datetime
 import logging
-import os, subprocess
 
+import kubernetes
 from flask import Flask, request, jsonify
+from openai import OpenAI, AssistantEventHandler
+from openai.types.beta.assistant import ToolResources
 from pydantic import BaseModel, ValidationError
 import openai
+import os, subprocess
+import json
 
 openai.api_key = os.getenv("OPENAI_API_KEY")
+client = OpenAI()
 
 # Configure logging
 logging.basicConfig(level=logging.DEBUG,
@@ -15,63 +21,43 @@ logging.basicConfig(level=logging.DEBUG,
 
 app = Flask(__name__)
 
+kubernetes.config.load_kube_config()
 
 class QueryResponse(BaseModel):
     query: str
     answer: str
 
-# Function to parse user query using ChatGPT API
-def extract_intent_resource_from_query(query):
-    messages = [
-        {
-            "role": "system",
-            "content": "You are an ai assistant who will answer questions about various resources deployed in a k8s cluster."
-        },
-        {
-            "role": "user",
-            "content": f"""
-    Extract the intent, and resource from the following Kubernetes-related query:
-    "{query}"
-    Respond in JSON format as:
-    {{
-        "intent": "<intent>",
-        "resource": "<resource>",
-    }}
-    Available options for intent are get_pod_count, get_container_port, get_pod_status, get_service_port, get_probe_path, get_secret_association, get_mount_path, get_env_variable, get_database_name.   
-    """
-        }
-    ]
-    response = openai.chat.completions.create(
-        model="gpt-4-turbo",
-        messages=messages,
+def custom_serializer(obj):
+    """Custom serializer for non-serializable objects."""
+    if isinstance(obj, datetime.datetime):
+        return obj.isoformat()  # Convert datetime to ISO 8601 string
+    raise TypeError(f"Type {type(obj)} not serializable")
 
-    )
-    return response.choices[0].message.content
+class EventHandler(AssistantEventHandler):
+  # @override
+  def on_text_created(self, text) -> None:
+      print(f"\nassistant > ", end="", flush=True)
 
-# Function to generate kubectl commands based on parsed query
-def get_kubectl_command(intent, resource, namespace):
-    if intent == "get_namespace":
-        return f"kubectl get svc {resource} -o jsonpath='{{.metadata.namespace}}'"
-    elif intent == "get_pod_count":
-        return "kubectl get pods --all-namespaces | wc -l"
-    elif intent == "get_container_port":
-        return f"kubectl -n {namespace} get pod {resource} -o jsonpath='{{.spec.containers[0].ports[0].containerPort}}'"
-    elif intent == "get_pod_status":
-        return f"kubectl -n {namespace} get pod {resource} -o jsonpath='{{.status.phase}}'"
-    elif intent == "get_service_port":
-        return f"kubectl -n {namespace} get svc {resource} -o jsonpath='{{.spec.ports[0].port}}'"
-    elif intent == "get_probe_path":
-        return f"kubectl -n {namespace} get pod {resource} -o jsonpath='{{.spec.containers[0].readinessProbe.httpGet.path}}'"
-    elif intent == "get_secret_association":
-        return f"kubectl -n {namespace} get pod -o json | jq -r '.items[] | select(.spec.volumes[].secret.secretName==\"{resource}\") | .metadata.name'"
-    elif intent == "get_mount_path":
-        return f"kubectl -n {namespace} get pod {resource} -o jsonpath='{{.spec.volumes[0].persistentVolumeClaim.claimName}}'"
-    elif intent == "get_env_variable":
-        return f"kubectl -n {namespace} get pod {resource} -o jsonpath='{{.spec.containers[0].env[?(@.name==CHART_CACHE_DRIVER)].value}}'"
-    elif intent == "get_database_name":
-        return f"kubectl -n {namespace} exec {resource} -- psql -c 'SELECT current_database()'"
-    else:
-        return None
+  # @override
+  def on_tool_call_created(self, tool_call):
+      print(f"\nassistant > {tool_call.type}\n", flush=True)
+
+  # @override
+  def on_message_done(self, message) -> None:
+      # print a citation to the file searched
+      message_content = message.content[0].text
+      annotations = message_content.annotations
+      citations = []
+      for index, annotation in enumerate(annotations):
+          message_content.value = message_content.value.replace(
+              annotation.text, f"[{index}]"
+          )
+          if file_citation := getattr(annotation, "file_citation", None):
+              cited_file = client.files.retrieve(file_citation.file_id)
+              citations.append(f"[{index}] {cited_file.filename}")
+
+      print(message_content.value)
+      print("\n".join(citations))
 
 @app.route('/query', methods=['POST'])
 def create_query():
@@ -79,55 +65,112 @@ def create_query():
         logging.info("API key successfully loaded." + openai.api_key)
     else:
         logging.info("API key is missing. Please set the OPENAI_API_KEY environment variable.")
+
+    request_data = request.json
+    query = request_data.get('query')
+
+    core_v1 = kubernetes.client.CoreV1Api()
+    apps_v1 = kubernetes.client.AppsV1Api()
+
+    all_resources = {}
     try:
-        # Extract the question from the request data
-        request_data = request.json
-        query = request_data.get('query')
+        # Get Pods
+        pods = core_v1.list_pod_for_all_namespaces()
+        all_resources["pods"] = [pod.to_dict() for pod in pods.items]
 
-        # Log the question
-        logging.info(f"Received query: {query}")
+        # Get Secrets
+        secrets = core_v1.list_secret_for_all_namespaces()
+        all_resources["secrets"] = [secret.to_dict() for secret in secrets.items]
 
-        try:
-            answer = subprocess.run("kubectl get ns -o json", shell=True, check=True, capture_output=True,
-                                    text=True).stdout.strip()
-            json_ns = ast.literal_eval(answer)
-            namespaces = [i["metadata"]["name"] for i in json_ns["items"]]
-            logging.info("namespaces list - %s", namespaces)
-        except Exception as e:
-            logging.info("Error while running get ns command - " + str(e))
-            return jsonify({"error": e}), 500
-        namespaces.remove('kube-node-lease')
-        namespaces.remove('kube-public')
-        namespaces.remove('kube-system')
+        # Get Services
+        services = core_v1.list_service_for_all_namespaces()
+        all_resources["services"] = [service.to_dict() for service in services.items]
 
-        intent_resource = extract_intent_resource_from_query(query)
-        if intent_resource.startswith("json"):
-            intent_resource.replace("json", "")
-        intent_resource = intent_resource.strip()
-        intent_resource_json = ast.literal_eval(intent_resource)
-        logging.info("Got intent_resource - " + str(intent_resource_json))
-        for ns in namespaces:
-            k8s_cmd = get_kubectl_command(intent_resource_json["intent"], intent_resource_json["resource"], ns)
-            if k8s_cmd:
-                logging.info("Generated k8s command - "+k8s_cmd)
-            try:
-                answer = subprocess.run(k8s_cmd, shell=True, check=True, capture_output=True, text=True).stdout.strip()
-                logging.info("Answer rcvd - %s", answer)
-            except Exception as e:
-                logging.info("Error while running generated k8s command - " + str(e))
-                return jsonify({"error": e}), 500
+        logging.info("got all data from k8s cluster - "  + str(all_resources))
+    except Exception as e:
+        logging.info("Error while reading all resources command - " + str(e))
+        return jsonify({"error": e}), 500
 
-        # Log the answer
-        logging.info(f"Generated answer: {answer}")
+    with open("/tmp/k8s_resources_all_namespaces.json", "w") as f:
+        json.dump(all_resources, f, indent=4, default=custom_serializer)
 
-        # Create the response model
-        response = QueryResponse(query=query, answer=answer)
+    client = OpenAI()
+    assistant = client.beta.assistants.create(
+        name="K8s AI Assistant",
+        instructions="You are an ai assitant for resources in a k8s cluster. Answer the query given by user based on the provided info.",
+        tools=[{"type": "code_interpreter"}],
+        model="gpt-4-turbo",
+    )
 
-        return jsonify(response.dict())
+    # Create a vector store caled "Financial Statements"
+    vector_store = client.beta.vector_stores.create(name="Resources in a K8s cluster")
 
-    except ValidationError as e:
-        return jsonify({"error": e.errors()}), 400
+    # Ready the files for upload to OpenAI
+    file_paths = ["/tmp/k8s_resources_all_namespaces.json"]
+    file_streams = [open(path, "rb") for path in file_paths]
+
+    # Use the upload and poll SDK helper to upload the files, add them to the vector store,
+    # and poll the status of the file batch for completion.
+    file_batch = client.beta.vector_stores.file_batches.upload_and_poll(
+        vector_store_id=vector_store.id, files=file_streams
+    )
+
+    # You can print the status and the file counts of the batch to see the result of this operation.
+    logging.info(file_batch.status)
+    logging.info(file_batch.file_counts)
+    logging.info("file_batch - " + str(file_batch))
+    assistant = client.beta.assistants.update(
+        assistant_id=assistant.id,
+        tool_resources={"code_interpreter": ToolResources(files=file_batch.files)},
+    )
+
+    # Upload the user provided file to OpenAI
+    message_file = client.files.create(
+        file=open("/tmp/k8s_resources_all_namespaces.json", "rb"), purpose="assistants"
+    )
+
+    # Create a thread and attach the file to the message
+    thread = client.beta.threads.create(
+        messages=[
+            {
+                "role": "user",
+                "content": query,
+                # Attach the new file to the message.
+                "attachments": [
+                    {"file_id": message_file.id, "tools": [{"type": "file_search"}]}
+                ],
+            }
+        ]
+    )
+
+    # The thread now has a vector store with that file in its tool resources.
+    logging.info(thread.tool_resources.file_search)
+
+    # Use the create and poll SDK helper to create a run and poll the status of
+    # the run until it's in a terminal state.
+
+    run = client.beta.threads.runs.create_and_poll(
+        thread_id=thread.id, assistant_id=assistant.id
+    )
+
+    messages = list(client.beta.threads.messages.list(thread_id=thread.id, run_id=run.id))
+
+    message_content = messages[0].content[0].text
+    annotations = message_content.annotations
+    citations = []
+    for index, annotation in enumerate(annotations):
+        message_content.value = message_content.value.replace(annotation.text, f"[{index}]")
+        if file_citation := getattr(annotation, "file_citation", None):
+            cited_file = client.files.retrieve(file_citation.file_id)
+            citations.append(f"[{index}] {cited_file.filename}")
+
+    logging.info(message_content.value)
+    logging.info("\n".join(citations))
+
+    ret_response = QueryResponse(query=query, answer=message_content.value)
+    logging.info("Got ret_response: %s", ret_response)
+    return jsonify(ret_response.dict())
 
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=8000)
+    app.run(host="0.0.0.0", port=8000, debug=True)
