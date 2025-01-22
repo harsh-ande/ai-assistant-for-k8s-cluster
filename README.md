@@ -1,12 +1,12 @@
 ## Introduction
-An AI agent capable of interacting with a K8s cluster and accurately answer queries about applications deployed in the cluster.
+An AI agent capable of interacting with a K8s cluster and accurately answering queries in English about various resources deployed in a K8s cluster.
 
 ### Requirements
 - Python 3.10
-- The kubeconfig file to be located at `~/.kube/config`
+- The kubeconfig file should be placed at `~/.kube/config`
 
 ### Environment variables
-- An API key should be passed as `OPENAI_API_KEY` to the environment before running the script.
+- An API key should be passed as a environment variable `OPENAI_API_KEY` before running the script.
 
 ### API Specifications
 - URL: `http://localhost:8000/query`
